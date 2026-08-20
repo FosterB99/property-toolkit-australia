@@ -17,6 +17,7 @@ type AmortizationChartProps = {
   series: ChartSeries[];
   loanAmount: number;
   frequency: RepaymentFrequency;
+  termYears: number;
 };
 
 type ChartPoint = {
@@ -82,7 +83,22 @@ function formatYears(value: number) {
   return `${value.toFixed(1)} yrs`;
 }
 
-export function AmortizationChart({ series, loanAmount, frequency }: AmortizationChartProps) {
+function getYearTicks(termYears: number) {
+  const tickStep = termYears <= 6 ? 1 : termYears <= 12 ? 2 : 5;
+  const ticks: number[] = [];
+
+  for (let year = 0; year < termYears; year += tickStep) {
+    ticks.push(year);
+  }
+
+  if (ticks[ticks.length - 1] !== termYears) {
+    ticks.push(termYears);
+  }
+
+  return ticks;
+}
+
+export function AmortizationChart({ series, loanAmount, frequency, termYears }: AmortizationChartProps) {
   const [activePointIndex, setActivePointIndex] = useState<number | null>(null);
   const [isAnimating, setIsAnimating] = useState(false);
 
@@ -93,35 +109,16 @@ export function AmortizationChart({ series, loanAmount, frequency }: Amortizatio
   }, [series, loanAmount, frequency]);
 
   const chartData = useMemo(() => {
-    const baseLength = Math.max(2, series[0]?.balances.length ?? 2);
-    const pointsCount = Math.max(8, Math.min(18, baseLength));
-    const step = Math.max(1, Math.floor((baseLength - 1) / Math.max(1, pointsCount - 1)));
-    const sampledIndexes = Array.from({ length: pointsCount }, (_, index) => {
-      if (index === pointsCount - 1) {
-        return baseLength - 1;
-      }
-      return Math.min(baseLength - 1, index * step);
-    });
-
     const paymentsPerYear = frequency === "monthly" ? 12 : frequency === "fortnightly" ? 26 : 52;
     const maxBalance = Math.max(loanAmount, ...series.flatMap((item) => item.balances));
-    const maxYear = Math.max(5, Math.ceil(baseLength / paymentsPerYear) + 1);
+    const maxYear = Math.max(1, termYears);
     const width = 980;
     const height = 480;
-    const padding = { top: 28, right: 34, bottom: 76, left: 112 };
+    const padding = { top: 28, right: 48, bottom: 76, left: 112 };
     const innerWidth = width - padding.left - padding.right;
     const innerHeight = height - padding.top - padding.bottom;
 
-    const points = sampledIndexes.map((index) => {
-      const year = index / paymentsPerYear;
-      return {
-        index,
-        x: padding.left + (year / maxYear) * innerWidth,
-        year,
-      };
-    });
-
-    const xTicks = Array.from({ length: Math.floor(maxYear / 5) + 1 }, (_, tick) => tick * 5).filter((tick) => tick <= maxYear);
+    const xTicks = getYearTicks(maxYear);
     const yTicks = Array.from({ length: 5 }, (_, tick) => {
       const ratio = tick / 4;
       return maxBalance * (1 - ratio);
@@ -135,21 +132,25 @@ export function AmortizationChart({ series, loanAmount, frequency }: Amortizatio
       innerHeight,
       maxBalance,
       maxYear,
-      points,
       xTicks,
       yTicks,
+      paymentsPerYear,
     };
-  }, [series, loanAmount, frequency]);
+  }, [series, loanAmount, frequency, termYears]);
 
   const seriesData = useMemo(() => {
     return series.map((item) => {
-      const points = chartData.points.map((point) => {
-        const balance = item.balances[point.index] ?? 0;
-        const interest = item.cumulativeInterests[point.index] ?? 0;
+      const points = item.balances.map((balance, index) => {
+        const period = index + 1;
+        const year = period / chartData.paymentsPerYear;
+        const interest = item.cumulativeInterests[index] ?? 0;
         const principal = Math.max(0, loanAmount - balance);
+        const x = chartData.padding.left + (year / chartData.maxYear) * chartData.innerWidth;
         const y = chartData.padding.top + (1 - (balance / Math.max(1, chartData.maxBalance))) * chartData.innerHeight;
         return {
-          ...point,
+          index,
+          x,
+          year,
           balance,
           interest,
           principal,
@@ -159,7 +160,9 @@ export function AmortizationChart({ series, loanAmount, frequency }: Amortizatio
 
       const linePath = buildSmoothPath(points);
       const baselineY = chartData.height - chartData.padding.bottom;
-      const areaPath = `${linePath} L ${chartData.width - chartData.padding.right} ${baselineY} L ${chartData.padding.left} ${baselineY} Z`;
+  const areaStartX = points[0]?.x ?? chartData.padding.left;
+  const areaEndX = points[points.length - 1]?.x ?? chartData.padding.left;
+  const areaPath = `${linePath} L ${areaEndX} ${baselineY} L ${areaStartX} ${baselineY} Z`;
 
       const payoffIndex = item.balances.findIndex((balance) => balance <= 0.01);
       const payoffPoint = payoffIndex >= 0 ? points.find((point) => point.index === payoffIndex) ?? points[points.length - 1] : points[points.length - 1];
@@ -326,8 +329,19 @@ export function AmortizationChart({ series, loanAmount, frequency }: Amortizatio
                     <g>
                       <line x1={item.payoffPoint.x} y1={chartData.padding.top} x2={item.payoffPoint.x} y2={chartData.height - chartData.padding.bottom} stroke={item.color} strokeDasharray="6 5" strokeOpacity="0.75" />
                       <circle cx={item.payoffPoint.x} cy={item.payoffPoint.y} r="6" fill={item.color} stroke="#fff" strokeWidth="2.5" />
-                      <rect x={item.payoffPoint.x + 8} y={chartData.padding.top + 12} width="180" height="38" rx="10" fill="white" stroke="#e2e8f0" />
-                      <text x={item.payoffPoint.x + 20} y={chartData.padding.top + 30} className="fill-slate-700 text-[11px] font-semibold">Payoff {item.payoffDate}</text>
+                      {(() => {
+                        const labelWidth = 180;
+                        const labelHeight = 38;
+                        const labelY = chartData.padding.top + 12;
+                        const labelX = item.payoffPoint.x + 8 + labelWidth > chartData.width - chartData.padding.right ? item.payoffPoint.x - labelWidth - 8 : item.payoffPoint.x + 8;
+
+                        return (
+                          <g>
+                            <rect x={labelX} y={labelY} width={labelWidth} height={labelHeight} rx="10" fill="white" stroke="#e2e8f0" />
+                            <text x={labelX + 12} y={chartData.padding.top + 30} className="fill-slate-700 text-[11px] font-semibold">Payoff {item.payoffDate}</text>
+                          </g>
+                        );
+                      })()}
                     </g>
                   ) : null}
                 </g>

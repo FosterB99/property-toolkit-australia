@@ -57,6 +57,134 @@ type CalculationResult = {
   }>;
 };
 
+const emptyCalculationResult: CalculationResult = {
+  monthlyRepayment: 0,
+  fortnightlyRepayment: 0,
+  weeklyRepayment: 0,
+  totalInterest: 0,
+  totalAmountRepaid: 0,
+  payoffDate: "—",
+  baselineRepayment: 0,
+  baselineInterest: 0,
+  baselinePayoffDate: "—",
+  interestSavedFromOffset: 0,
+  timeSavedFromExtraRepayments: "0 months",
+  monthsSavedFromExtraRepayments: 0,
+  chartSeries: [],
+};
+
+function buildCalculationResult({
+  loanValue,
+  rate,
+  termYears,
+  offset,
+  extra,
+  repaymentFrequency,
+  extraRepaymentFrequency,
+}: {
+  loanValue: number;
+  rate: number;
+  termYears: number;
+  offset: number;
+  extra: number;
+  repaymentFrequency: RepaymentFrequency;
+  extraRepaymentFrequency: ExtraRepaymentFrequency;
+}): CalculationResult {
+  if (loanValue <= 0 || termYears <= 0 || rate <= 0) {
+    return emptyCalculationResult;
+  }
+
+  const selectedSchedule = calculateSchedule({
+    loanAmount: loanValue,
+    annualRate: rate,
+    termYears,
+    frequency: repaymentFrequency,
+    extraRepayments: extra,
+    offsetBalance: offset,
+    extraRepaymentFrequency,
+  });
+
+  const baselineSchedule = calculateSchedule({
+    loanAmount: loanValue,
+    annualRate: rate,
+    termYears,
+    frequency: repaymentFrequency,
+    extraRepayments: 0,
+    offsetBalance: 0,
+    extraRepaymentFrequency,
+  });
+
+  const monthlySchedule = calculateSchedule({
+    loanAmount: loanValue,
+    annualRate: rate,
+    termYears,
+    frequency: "monthly",
+    extraRepayments: extra,
+    offsetBalance: 0,
+    extraRepaymentFrequency,
+  });
+
+  const fortnightlySchedule = calculateSchedule({
+    loanAmount: loanValue,
+    annualRate: rate,
+    termYears,
+    frequency: "fortnightly",
+    extraRepayments: extra,
+    offsetBalance: 0,
+    extraRepaymentFrequency,
+  });
+
+  const weeklySchedule = calculateSchedule({
+    loanAmount: loanValue,
+    annualRate: rate,
+    termYears,
+    frequency: "weekly",
+    extraRepayments: extra,
+    offsetBalance: 0,
+    extraRepaymentFrequency,
+  });
+
+  const paymentsPerYear = repaymentFrequency === "monthly" ? 12 : repaymentFrequency === "fortnightly" ? 26 : 52;
+  const periodsSaved = Math.max(0, baselineSchedule.periods - selectedSchedule.periods);
+  const timeSaved = formatYearsMonths(periodsSaved, paymentsPerYear);
+  const monthsSaved = Math.max(0, Math.round((periodsSaved / paymentsPerYear) * 12));
+
+  const chartSeries = [
+    {
+      label: "Standard loan",
+      balances: baselineSchedule.balanceHistory,
+      cumulativeInterests: baselineSchedule.schedule.map((point) => point.interest),
+      payoffDate: baselineSchedule.payoffDate,
+      color: "#38bdf8",
+      fill: "url(#without-offset-fill)",
+    },
+    {
+      label: "Offset + extra repayments",
+      balances: selectedSchedule.balanceHistory,
+      cumulativeInterests: selectedSchedule.schedule.map((point) => point.interest),
+      payoffDate: selectedSchedule.payoffDate,
+      color: "#10b981",
+      fill: "url(#with-offset-fill)",
+    },
+  ];
+
+  return {
+    monthlyRepayment: monthlySchedule.payment,
+    fortnightlyRepayment: fortnightlySchedule.payment,
+    weeklyRepayment: weeklySchedule.payment,
+    totalInterest: selectedSchedule.totalInterest,
+    totalAmountRepaid: selectedSchedule.totalAmountRepaid,
+    payoffDate: selectedSchedule.payoffDate,
+    baselineRepayment: baselineSchedule.payment,
+    baselineInterest: baselineSchedule.totalInterest,
+    baselinePayoffDate: baselineSchedule.payoffDate,
+    interestSavedFromOffset: Math.max(baselineSchedule.totalInterest - selectedSchedule.totalInterest, 0),
+    timeSavedFromExtraRepayments: timeSaved,
+    monthsSavedFromExtraRepayments: monthsSaved,
+    chartSeries,
+  };
+}
+
 export function MortgageCalculator() {
   const [loanAmount, setLoanAmount] = useState("");
   const [interestRate, setInterestRate] = useState("");
@@ -67,6 +195,7 @@ export function MortgageCalculator() {
   const [extraRepayments, setExtraRepayments] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(true);
   const [selectedPaymentView, setSelectedPaymentView] = useState<RepaymentFrequency>("monthly");
+  const [calculationResult, setCalculationResult] = useState<CalculationResult>(emptyCalculationResult);
 
   const parsedValues = useMemo(() => {
     const loanValue = Number(loanAmount) || 0;
@@ -78,127 +207,15 @@ export function MortgageCalculator() {
     return { loanValue, rate, termYears, offset, extra };
   }, [loanAmount, interestRate, loanTermYears, offsetBalance, extraRepayments]);
 
-  const result = useMemo(() => {
-    const { loanValue, rate, termYears, offset, extra } = parsedValues;
-
-    if (loanValue <= 0 || termYears <= 0 || rate <= 0) {
-      return {
-        monthlyRepayment: 0,
-        fortnightlyRepayment: 0,
-        weeklyRepayment: 0,
-        totalInterest: 0,
-        totalAmountRepaid: 0,
-        payoffDate: "—",
-        baselineRepayment: 0,
-        baselineInterest: 0,
-        baselinePayoffDate: "—",
-        interestSavedFromOffset: 0,
-        timeSavedFromExtraRepayments: "0 months",
-        monthsSavedFromExtraRepayments: 0,
-        chartSeries: [],
-      } satisfies CalculationResult;
-    }
-
-    const selectedSchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: repaymentFrequency,
-      extraRepayments: extra,
-      offsetBalance: offset,
-      extraRepaymentFrequency,
-    });
-
-    const baselineSchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: repaymentFrequency,
-      extraRepayments: 0,
-      offsetBalance: 0,
-      extraRepaymentFrequency,
-    });
-
-    const monthlySchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: "monthly",
-      extraRepayments: extra,
-      offsetBalance: 0,
-      extraRepaymentFrequency,
-    });
-
-    const fortnightlySchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: "fortnightly",
-      extraRepayments: extra,
-      offsetBalance: 0,
-      extraRepaymentFrequency,
-    });
-
-    const weeklySchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: "weekly",
-      extraRepayments: extra,
-      offsetBalance: 0,
-      extraRepaymentFrequency,
-    });
-
-    const offsetFreeSchedule = calculateSchedule({
-      loanAmount: loanValue,
-      annualRate: rate,
-      termYears,
-      frequency: repaymentFrequency,
-      extraRepayments: extra,
-      offsetBalance: 0,
-      extraRepaymentFrequency,
-    });
-
-    const paymentsPerYear = repaymentFrequency === "monthly" ? 12 : repaymentFrequency === "fortnightly" ? 26 : 52;
-    const periodsSaved = Math.max(0, baselineSchedule.periods - selectedSchedule.periods);
-    const timeSaved = formatYearsMonths(periodsSaved, paymentsPerYear);
-    const monthsSaved = Math.max(0, Math.round((periodsSaved / paymentsPerYear) * 12));
-
-    const chartSeries = [
-      {
-        label: "With Offset",
-        balances: selectedSchedule.balanceHistory,
-        cumulativeInterests: selectedSchedule.schedule.map((point) => point.interest),
-        payoffDate: selectedSchedule.payoffDate,
-        color: "#10b981",
-        fill: "url(#with-offset-fill)",
-      },
-      {
-        label: "Without Offset",
-        balances: offsetFreeSchedule.balanceHistory,
-        cumulativeInterests: offsetFreeSchedule.schedule.map((point) => point.interest),
-        payoffDate: offsetFreeSchedule.payoffDate,
-        color: "#38bdf8",
-        fill: "url(#without-offset-fill)",
-      },
-    ];
-
-    return {
-      monthlyRepayment: monthlySchedule.payment,
-      fortnightlyRepayment: fortnightlySchedule.payment,
-      weeklyRepayment: weeklySchedule.payment,
-      totalInterest: selectedSchedule.totalInterest,
-      totalAmountRepaid: selectedSchedule.totalAmountRepaid,
-      payoffDate: selectedSchedule.payoffDate,
-      baselineRepayment: baselineSchedule.payment,
-      baselineInterest: baselineSchedule.totalInterest,
-      baselinePayoffDate: baselineSchedule.payoffDate,
-      interestSavedFromOffset: Math.max(baselineSchedule.totalInterest - selectedSchedule.totalInterest, 0),
-      timeSavedFromExtraRepayments: timeSaved,
-      monthsSavedFromExtraRepayments: monthsSaved,
-      chartSeries,
-    } satisfies CalculationResult;
-  }, [parsedValues, repaymentFrequency, extraRepaymentFrequency]);
+  const handleCalculate = () => {
+    setCalculationResult(
+      buildCalculationResult({
+        ...parsedValues,
+        repaymentFrequency,
+        extraRepaymentFrequency,
+      }),
+    );
+  };
 
   const handleLoanAmountChange = (value: string) => {
     setLoanAmount(value);
@@ -211,23 +228,23 @@ export function MortgageCalculator() {
   ];
 
   const monetaryCards = [
-    { label: "Total interest paid", value: formatCurrency(result.totalInterest), info: "This is the total interest you would pay over the full life of the loan in this scenario." },
-    { label: "Total amount repaid", value: formatCurrency(result.totalAmountRepaid), info: "This is the full amount you would repay, including both principal and interest." },
-    { label: "Interest saved", value: formatCurrency(result.interestSavedFromOffset), info: "This shows how much interest you could save by using offset and extra repayments." },
+    { label: "Total interest paid", value: formatCurrency(calculationResult.totalInterest), info: "This is the total interest you would pay over the full life of the loan in this scenario." },
+    { label: "Total amount repaid", value: formatCurrency(calculationResult.totalAmountRepaid), info: "This is the full amount you would repay, including both principal and interest." },
+    { label: "Interest saved", value: formatCurrency(calculationResult.interestSavedFromOffset), info: "This shows how much interest you could save by using offset and extra repayments." },
   ];
 
   const timeCards = [
-    { label: "New loan term", value: formatTermAfterSavings(parsedValues.termYears, result.monthsSavedFromExtraRepayments), info: "This is your revised loan term after the time saved from extra repayments is applied." },
-    { label: "Time saved", value: result.timeSavedFromExtraRepayments, info: "This shows how much sooner the loan could be repaid with extra repayments." },
+    { label: "New loan term", value: formatTermAfterSavings(parsedValues.termYears, calculationResult.monthsSavedFromExtraRepayments), info: "This is your revised loan term after the time saved from extra repayments is applied." },
+    { label: "Time saved", value: calculationResult.timeSavedFromExtraRepayments, info: "This shows how much sooner the loan could be repaid with extra repayments." },
     { label: "Original loan term", value: `${parsedValues.termYears} years`, info: "This is the original repayment period you entered before applying any savings." },
-    { label: "Estimated payoff date", value: result.payoffDate, info: "This is the projected date your loan would be fully paid off under these assumptions." },
+    { label: "Estimated payoff date", value: calculationResult.payoffDate, info: "This is the projected date your loan would be fully paid off under these assumptions." },
   ];
 
   const comparisonCards = [
-    { label: "Standard loan", value: formatCurrency(result.baselineRepayment), info: "This is the repayment amount if you did not use offset or extra repayment features." },
-    { label: "Current scenario", value: formatCurrency(result[`${selectedPaymentView}Repayment` as keyof CalculationResult] as number), info: "This is your chosen repayment amount for the current scenario." },
-    { label: "Interest saved", value: formatCurrency(result.interestSavedFromOffset), info: "This shows the interest advantage from the offset and extra repayment strategy." },
-    { label: "Time saved", value: result.timeSavedFromExtraRepayments, info: "This shows how much faster the loan could be paid off compared with the standard loan." },
+    { label: "Standard loan", value: formatCurrency(calculationResult.baselineRepayment), info: "This is the repayment amount if you did not use offset or extra repayment features." },
+    { label: "Current scenario", value: formatCurrency(calculationResult[`${selectedPaymentView}Repayment` as keyof CalculationResult] as number), info: "This is your chosen repayment amount for the current scenario." },
+    { label: "Interest saved", value: formatCurrency(calculationResult.interestSavedFromOffset), info: "This shows the interest advantage from the offset and extra repayment strategy." },
+    { label: "Time saved", value: calculationResult.timeSavedFromExtraRepayments, info: "This shows how much faster the loan could be paid off compared with the standard loan." },
   ];
 
   return (
@@ -288,7 +305,7 @@ export function MortgageCalculator() {
                 <p className="mt-1 leading-6">Repayments use principal-and-interest amortisation. Offset balances reduce the interest-bearing balance without reducing the loan principal.</p>
               </div>
 
-              <button className="mt-3 inline-flex items-center rounded-full bg-gradient-to-r from-emerald-600 to-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:opacity-90">
+              <button type="button" onClick={handleCalculate} className="mt-3 inline-flex items-center rounded-full bg-gradient-to-r from-emerald-600 to-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:opacity-90">
                 Calculate
               </button>
             </div>
@@ -296,7 +313,7 @@ export function MortgageCalculator() {
             <div className="rounded-[32px] border border-slate-200/80 bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900 p-3 text-white shadow-[0_35px_100px_-35px_rgba(6,78,59,0.75)] sm:p-4">
               <div className="rounded-[24px] border border-white/10 bg-white/10 p-3 backdrop-blur">
                 <p className="text-sm font-semibold uppercase tracking-[0.32em] text-emerald-200">Your repayment</p>
-                <div aria-live="polite" role="status" className="mt-3 text-3xl font-semibold transition-all duration-300 sm:text-4xl">{formatCurrency(result[`${selectedPaymentView}Repayment` as keyof CalculationResult] as number)}</div>
+                <div aria-live="polite" role="status" className="mt-3 text-3xl font-semibold transition-all duration-300 sm:text-4xl">{formatCurrency(calculationResult[`${selectedPaymentView}Repayment` as keyof CalculationResult] as number)}</div>
                 <p className="mt-1 text-sm leading-6 text-slate-300">per {selectedPaymentView}</p>
                 <div className="mt-2.5 flex flex-wrap gap-2">
                   {repaymentOptions.map((option) => {
@@ -370,8 +387,8 @@ export function MortgageCalculator() {
               <p className="text-sm text-slate-500">The green line shows the reduced balance with your offset and extra repayments.</p>
             </div>
             <div className="mt-3 rounded-[24px] border border-slate-200 bg-slate-50/70 p-2.5">
-              {result.chartSeries.length > 0 ? (
-                <AmortizationChart series={result.chartSeries} loanAmount={Number(loanAmount) || 0} frequency={repaymentFrequency} />
+              {calculationResult.chartSeries.length > 0 ? (
+                <AmortizationChart series={calculationResult.chartSeries} loanAmount={parsedValues.loanValue} frequency={repaymentFrequency} termYears={parsedValues.termYears} />
               ) : (
                 <div className="flex h-64 items-center justify-center text-sm text-slate-500">Run a calculation to generate the balance history.</div>
               )}
